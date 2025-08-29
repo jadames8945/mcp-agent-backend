@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "mcp_server"
+version = "0.1.0"
+description = ""
+authors = ["Juan Adames"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+langchain = "^0.3.25"
+wikipedia = "^1.4.0"
+langgraph = "^0.4.2"
+langchain-community = "^0.3.23"
+langchain-openai = "^0.3.16"
+langchain-anthropic = "^0.3.12"
+langchain-experimental = "^0.3.4"
+python-dotenv = "^1.1.0"
+pydantic = "^2.11.4"
+duckduckgo-search = "^8.0.1"
+fastapi = "^0.115.12"
+fastmcp = "^2.2.10"
+uvicorn = "^0.34.2"
+mcp = {extras = ["cli"], version = "^1.7.1"}
+requests = "^2.32.3"
+yfinance = "^0.2.65"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

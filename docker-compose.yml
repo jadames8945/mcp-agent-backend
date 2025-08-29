@@ -1,0 +1,119 @@
+version: "3"
+
+services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6325:6379"
+    networks:
+      - network-service
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  mongo:
+    image: mongo:latest
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: root
+    ports:
+      - "27025:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - network-service
+
+  backend:
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile
+    container_name: mcp-backend
+    restart: unless-stopped
+    volumes:
+      - ./.docker/.ipython:/root/.ipython:cached
+    ports:
+      - "9889:9889"
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: .
+      REDIS_SERVER: redis://redis:6379
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: root
+      ALLOWED_ORIGINS_REGISTRY: "origin_uris.txt"
+    depends_on:
+      - redis
+      - mongo
+    networks:
+      - network-service
+
+  auth:
+    build:
+      context: .
+      dockerfile: ./auth/Dockerfile
+    container_name: mcp-auth
+    restart: unless-stopped
+    volumes:
+      - ./.docker/.ipython:/root/.ipython:cached
+    ports:
+      - "8946:8946"
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: .
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: root
+      ALLOWED_ORIGINS_REGISTRY: "origin_uris.txt"
+    depends_on:
+      - mongo
+    networks:
+      - network-service
+
+  worker:
+    build:
+      context: .
+      dockerfile: ./worker/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./.docker/.ipython:/root/.ipython:cached
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: .
+      REDIS_SERVER: redis://redis:6379
+    depends_on:
+      - redis
+      - mongo
+      - backend
+    networks:
+      - network-service
+
+  default-mcp-server:
+    container_name: "default-mcp-server-2"
+    build:
+      context: .
+      dockerfile: ./mcp_server/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./.docker/.ipython:/root/.ipython:cached
+    environment:
+      PYTHONPATH: .
+    ports:
+      - "9000:9000"
+    networks:
+      - network-service
+
+networks:
+  network-service:
+    driver: bridge
+
+volumes:
+  mongo_data:
+    driver: local

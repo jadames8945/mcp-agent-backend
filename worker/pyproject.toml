@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "paypal-agent-worker"
+version = "0.1.0"
+description = "PayPal Agent Worker with Celery task processing"
+authors = ["jadames <juan.adames@giantmachines.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fastapi = "^0.115.12"
+uvicorn = {extras = ["standard"], version = "^0.34.2"}
+celery = "^5.5.2"
+redis = "^6.2.0"
+langchain = "^0.3.25"
+
+langchain-openai = "^0.3.18"
+debugpy = "^1.8.14"
+pydevd-pycharm = "^252.18003.35"
+python-dotenv = "^1.1.0"
+
+pymongo = "^4.13.2"
+langchain-community = "^0.3.26"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
