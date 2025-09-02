@@ -31,3 +31,39 @@ def invoke_streamed_response(
     except Exception as e:
         logger.exception(f"Unified streaming task failed: {e}")
         return False
+
+
+@worker_app.task(name="send_progress_update")
+def send_progress_update(
+        session_id: str,
+        result_channel: str,
+        tool_name: str,
+        progress_step: int,
+        tool_len: int,
+        message: str
+) -> bool:
+    try:
+        from common.infrastructure import infra
+        
+        progress_message = f"Step {progress_step} of {tool_len}: {tool_name}\n{message}"
+        
+        redis_client = infra.redis_client
+        
+        redis_message = {
+            "agent_name": "workflow_progress",
+            "progress": "progress_update",
+            "chunk": progress_message,
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "progress_step": progress_step,
+            "tool_len": tool_len,
+            "message": message
+        }
+        
+        redis_client.xadd(result_channel, redis_message, maxlen=1000, approximate=True)
+        
+        return True
+        
+    except Exception as e:
+        logger.exception(f"Progress update task failed: {e}")
+        return False

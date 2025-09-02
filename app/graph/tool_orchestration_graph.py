@@ -70,8 +70,7 @@ class ToolOrchestrationGraph:
         if not tools:
             fallback_prompt = self.create_fallback_response(state, error_message="No tool invocations found.")
             
-            from worker.tasks import invoke_streamed_response
-            invoke_streamed_response.delay(
+            self._invoke_streamed_response(
                 agent_name="chat_agent",
                 session_id=state["session_id"],
                 user_input=state["query"],
@@ -93,32 +92,24 @@ class ToolOrchestrationGraph:
 
         tool_results: List[ToolResult] = []
 
-        # publish_message_sync(
-        #     channel=result_channel,
-        #     tool_name="workflow_start",
-        #     progress_step=0,
-        #     tool_len=tools_length,
-        #     result=(
-        #         f"status: thinking \n"
-        #         f"message : Processing your request with {tools_length} steps...\n"
-        #         f"total_steps: {str(tools_length)}"
-        #     )
-        # )
+        self._send_progress_update(
+            session_id=state["session_id"],
+            result_channel=result_channel,
+            tool_name="workflow_start",
+            progress_step=0,
+            tool_len=tools_length,
+            message=f"Starting workflow with {tools_length} tool invocations..."
+        )
 
         for idx, tool in enumerate(sorted_tools, 1):
-            # publish_message_sync(
-            #     channel=result_channel,
-            #     tool_name=tool.tool_name,
-            #     progress_step=idx,
-            #     tool_len=tools_length,
-            #     result=(
-            #         f"status: progress \n"
-            #         f"step: {str(idx)} \n"
-            #         f"tool : {tool.tool_name} \n"
-            #         f"message : Step {idx} of {tools_length}: {tool.tool_name} \n"
-            #         f"total_steps: {str(tools_length)}"
-            #     )
-            # )
+            self._send_progress_update(
+                session_id=state["session_id"],
+                result_channel=result_channel,
+                tool_name=tool.tool_name,
+                progress_step=idx,
+                tool_len=tools_length,
+                message=f"Executing {tool.tool_name}..."
+            )
 
             try:
                 updated_tool: ToolInvocation = tool_refinement_agent.refine_tool_invocation(
@@ -151,8 +142,7 @@ class ToolOrchestrationGraph:
                 logger.error(f"Failed to invoke tool '{tool.tool_name}' at step {idx}: {e}")
                 fallback_prompt = self.create_fallback_response(state, error_message=str(e))
                 
-                from worker.tasks import invoke_streamed_response
-                invoke_streamed_response.delay(
+                self._invoke_streamed_response(
                     agent_name="chat_agent",
                     session_id=state["session_id"],
                     user_input=user_input,
@@ -162,9 +152,7 @@ class ToolOrchestrationGraph:
                 )
                 return None
 
-        from worker.tasks import invoke_streamed_response
-
-        invoke_streamed_response.delay(
+        self._invoke_streamed_response(
             agent_name="summary_agent",
             session_id=state["session_id"],
             user_input=user_input,
@@ -214,6 +202,29 @@ class ToolOrchestrationGraph:
             )
 
         return fallback_prompt
+
+    def _send_progress_update(self, session_id: str, result_channel: str, tool_name: str, progress_step: int, tool_len: int, message: str) -> None:
+        from worker.tasks import send_progress_update
+        send_progress_update.delay(
+            session_id=session_id,
+            result_channel=result_channel,
+            tool_name=tool_name,
+            progress_step=progress_step,
+            tool_len=tool_len,
+            message=message
+        )
+
+    def _invoke_streamed_response(self, agent_name: str, session_id: str, user_input: str, result_channel: str, tool_summaries_str: str, chat_history_str: str, final_result: str | None = None) -> None:
+        from worker.tasks import invoke_streamed_response
+        invoke_streamed_response.delay(
+            agent_name=agent_name,
+            session_id=session_id,
+            user_input=user_input,
+            result_channel=result_channel,
+            tool_summaries_str=tool_summaries_str,
+            chat_history_str=chat_history_str,
+            final_result=final_result
+        )
 
     async def run(
             self,
