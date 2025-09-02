@@ -43,26 +43,26 @@ def send_progress_update(
         message: str
 ) -> bool:
     try:
-        from common.infrastructure import infra
+        from app.agents.streaming_agent.streaming_agent import _publish_chunk
         
         progress_message = f"Step {progress_step} of {tool_len}: {tool_name}\n{message}"
         
-        redis_client = infra.redis_client
+        logger.info(f"📤 Sending progress update: {progress_message}")
         
-        redis_message = {
-            "agent_name": "workflow_progress",
-            "progress": "progress_update",
-            "chunk": progress_message,
-            "session_id": session_id,
-            "tool_name": tool_name,
-            "progress_step": progress_step,
-            "tool_len": tool_len,
-            "message": message
-        }
+        success = _publish_chunk(
+            chunk=progress_message,
+            channel=result_channel,
+            agent_name="workflow_progress",
+            progress="progress_update",
+            session_id=session_id
+        )
         
-        redis_client.xadd(result_channel, redis_message, maxlen=1000, approximate=True)
+        if success:
+            logger.info(f"✅ Progress update sent successfully to channel {result_channel}")
+        else:
+            logger.error(f"❌ Failed to send progress update to channel {result_channel}")
         
-        return True
+        return success
         
     except Exception as e:
         logger.exception(f"Progress update task failed: {e}")

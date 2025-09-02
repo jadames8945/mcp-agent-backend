@@ -1,37 +1,23 @@
-import json
 import logging
-from typing import TypedDict, List, Any, Dict, Optional
-
+from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph
-from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.tool_orchestration_agent.tool_orchestration_agent import ToolOrchestrationAgent
 from app.agents.tool_refinement_agent.tool_refinement_agent import ToolRefinementAgent
-from app.caches.conversation_store import ConversationSession
-from app.schemas.tool_invocation import ToolInvocations, ToolInvocation
+from app.schemas.tool_invocation import ToolInvocation, ToolInvocations
 from app.schemas.tool_result import ToolResult
 from app.services.mcp_service import MCPService
-from app.utils.chat_util import format_final_summary_result
+from app.caches.conversation_store import ConversationSession
+from common.utils.tool_util import format_final_summary_result
 
 logger = logging.getLogger(__name__)
-
-
-class MultiAgentStepState(TypedDict):
-    session_id: str
-    result_channel: str
-    query: str
-    tool_summaries_str: str
-    mcp_service: MCPService
-    tool_invocations: ToolInvocations
-    conversation_session: ConversationSession
-
 
 class ToolOrchestrationGraph:
     def __init__(self):
         self.graph = self._build_graph()
 
-    def _build_graph(self) -> CompiledStateGraph:
-        builder = StateGraph(MultiAgentStepState)
+    def _build_graph(self):
+        builder = StateGraph(dict)
         builder.add_node("tool_orchestrator", self.tool_orchestrator_node)
         builder.add_node("tool_planner", self.planner_node)
 
@@ -41,7 +27,7 @@ class ToolOrchestrationGraph:
 
         return builder.compile()
 
-    async def tool_orchestrator_node(self, state: MultiAgentStepState) -> Optional[MultiAgentStepState]:
+    async def tool_orchestrator_node(self, state: dict) -> dict:
         try:
             tool_orchestrator_agent: ToolOrchestrationAgent = ToolOrchestrationAgent()
 
@@ -52,19 +38,16 @@ class ToolOrchestrationGraph:
             )
 
             if response is None or not response.tools:
-                return None
+                return state
 
             state["tool_invocations"] = response
 
             return state
         except Exception as e:
             logger.error(f"Error invoking multi-step agent: {e}")
-            return None
+            return state
 
-    async def planner_node(self, state: Optional[MultiAgentStepState]) -> str | None:
-        if state is None:
-            return None
-
+    async def planner_node(self, state: dict) -> dict:
         tools = state["tool_invocations"].tools
 
         if not tools:
@@ -78,7 +61,7 @@ class ToolOrchestrationGraph:
                 tool_summaries_str=state["tool_summaries_str"],
                 chat_history_str=state["conversation_session"].get_last_n_messages(10)
             )
-            return None
+            return state
 
         tool_refinement_agent: ToolRefinementAgent = ToolRefinementAgent()
         tool_summaries_str: str = state["tool_summaries_str"]
@@ -92,23 +75,25 @@ class ToolOrchestrationGraph:
 
         tool_results: List[ToolResult] = []
 
+        logger.info(f"🚀 Starting workflow with {tools_length} tools for session {state['session_id']}")
         self._send_progress_update(
             session_id=state["session_id"],
             result_channel=result_channel,
             tool_name="workflow_start",
             progress_step=0,
             tool_len=tools_length,
-            message=f"Starting workflow with {tools_length} tool invocations..."
+            message=f"Starting workflow with {tools_length} tool invocations, currently on step 0/{tools_length}"
         )
 
         for idx, tool in enumerate(sorted_tools, 1):
+            logger.info(f"🔧 Executing tool {idx}/{tools_length}: {tool.tool_name}")
             self._send_progress_update(
                 session_id=state["session_id"],
                 result_channel=result_channel,
                 tool_name=tool.tool_name,
                 progress_step=idx,
                 tool_len=tools_length,
-                message=f"Executing {tool.tool_name}..."
+                message=f"Executing {tool.tool_name} currently on step {idx}/{tools_length}"
             )
 
             try:
@@ -150,7 +135,9 @@ class ToolOrchestrationGraph:
                     tool_summaries_str=tool_summaries_str,
                     chat_history_str=conversation_session.get_last_n_messages(10)
                 )
-                return None
+                return state
+
+        logger.info(f"📝 Invoking summary agent for session {state['session_id']}")
 
         self._invoke_streamed_response(
             agent_name="summary_agent",
@@ -162,7 +149,7 @@ class ToolOrchestrationGraph:
             final_result=format_final_summary_result(tool_results)
         )
 
-        return None
+        return state
 
     async def _invoke_and_store_tool(
             self,
@@ -171,24 +158,20 @@ class ToolOrchestrationGraph:
             updated_tool: ToolInvocation,
             conversation_session: ConversationSession,
     ):
-        result: Dict[str, Any] = await mcp_service.invoke_tool(
+        result = await mcp_service.invoke_tool(
             tool_name=updated_tool.tool_name,
             input_data=updated_tool.input_data
         )
 
         conversation_session.add_message({
-            "role": "user",
-            "content": user_input
-        })
-
-        conversation_session.add_message({
             "role": "assistant",
-            "content": json.dumps(result)
+            "content": f"Tool {updated_tool.tool_name} executed with result: {result}"
+
         })
 
         return result
 
-    def create_fallback_response(self, state: MultiAgentStepState, error_message: Optional[str] = None) -> str:
+    def create_fallback_response(self, state: dict, error_message: Optional[str] = None) -> str:
         if error_message:
             fallback_prompt = (
                 f"There was a problem invoking a tool for this user input: {state['query']}.\n"
@@ -204,6 +187,7 @@ class ToolOrchestrationGraph:
         return fallback_prompt
 
     def _send_progress_update(self, session_id: str, result_channel: str, tool_name: str, progress_step: int, tool_len: int, message: str) -> None:
+        logger.info(f"📤 Sending progress update: {message}")
         from worker.tasks import send_progress_update
         send_progress_update.delay(
             session_id=session_id,
@@ -215,6 +199,7 @@ class ToolOrchestrationGraph:
         )
 
     def _invoke_streamed_response(self, agent_name: str, session_id: str, user_input: str, result_channel: str, tool_summaries_str: str, chat_history_str: str, final_result: str | None = None) -> None:
+        logger.info(f"📤 Invoking streamed response for {agent_name}")
         from worker.tasks import invoke_streamed_response
         invoke_streamed_response.delay(
             agent_name=agent_name,
@@ -235,14 +220,14 @@ class ToolOrchestrationGraph:
             mcp_service: MCPService,
             conversation_session: ConversationSession,
     ) -> None:
-        initial_state = MultiAgentStepState(
-            session_id=session_id,
-            query=query,
-            mcp_service=mcp_service,
-            tool_summaries_str=tool_summaries_str,
-            tool_invocations=ToolInvocations(tools=[]),
-            result_channel=result_channel,
-            conversation_session=conversation_session
-        )
+        initial_state = {
+            "session_id": session_id,
+            "query": query,
+            "mcp_service": mcp_service,
+            "tool_summaries_str": tool_summaries_str,
+            "tool_invocations": ToolInvocations(tools=[]),
+            "result_channel": result_channel,
+            "conversation_session": conversation_session
+        }
 
         return await self.graph.ainvoke(initial_state)
